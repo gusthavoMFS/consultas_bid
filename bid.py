@@ -3,6 +3,10 @@ import pandas as pd
 from streamlit_option_menu import option_menu
 import locale
 from bid_pagina import PageBidContratos
+from google.oauth2 import service_account
+import gspread
+from concurrent.futures import ThreadPoolExecutor
+
 
 # Configuração inicial
 st.set_page_config('Consulta Bid', layout='wide', page_icon='jogador.ico')
@@ -11,13 +15,52 @@ st.set_page_config('Consulta Bid', layout='wide', page_icon='jogador.ico')
 SENHA_DE_ACESSO = st.secrets['SENHA_TOKEN']
 
 
+def ler_arquivo_nuvem(gc, nome_arquivo: str):
+    print('Lendo:', nome_arquivo)
+    
+    worksheet = gc.open(nome_arquivo).sheet1
+    rows = worksheet.get_all_values()
+
+    # Criar DataFrame e remover cabeçalho duplicado
+    leia = pd.DataFrame.from_records(rows, columns=rows[0])
+    leia.drop(0, axis=0, inplace=True)
+
+    print('Terminei de ler:', nome_arquivo)
+    return leia
+
+
+# 🔹 Função para carregar todos os arquivos em paralelo
+def carrega_arquivos_nuvem(gc):
+
+    planilhas: str = st.secrets['planilhas_contratos']
+
+    planilhas = planilhas.split(';')
+
+    # Criar um pool de threads para executar as tarefas em paralelo
+    with ThreadPoolExecutor() as executor:
+        resultados = executor.map(lambda nome: ler_arquivo_nuvem(gc, nome), planilhas)
+
+    return pd.concat(resultados).reset_index(drop=True)
+
 
 
 # Função para carregar dados
+
 @st.cache_data
-def read_bid_cbf() -> pd.DataFrame:
-    leia = pd.read_csv(rf'bid.csv')
+def read_bid() -> pd.DataFrame:
+
+    secrets = st.secrets["gdrive"]
+
+    # Credenciais
+    credentials = service_account.Credentials.from_service_account_info(secrets, scopes=["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"])
+
+    # Conectar ao Google Drive
+    gc = gspread.authorize(credentials)
+
+    leia = carrega_arquivos_nuvem(gc)
+
     return leia
+
 
 @st.cache_resource
 def logado():
@@ -70,7 +113,7 @@ def login_page():
 def pagina_bid():
 
     if 'bid_contratos' not in st.session_state:
-        leia = read_bid_cbf()
+        leia = read_bid()
 
         leia = leia.sort_values('Nome').reset_index(drop=True)
         leia_ordenado_por_clube = leia.sort_values('Clube').reset_index(drop=True)
@@ -108,4 +151,3 @@ else:
     login_page()
 
 
-#print(st.session_state)
