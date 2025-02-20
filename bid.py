@@ -6,6 +6,7 @@ from bid_pagina import PageBidContratos
 from google.oauth2 import service_account
 import gspread
 from concurrent.futures import ThreadPoolExecutor
+import io
 
 
 # Configuração inicial
@@ -14,33 +15,62 @@ st.set_page_config('Consulta Bid', layout='wide', page_icon='jogador.ico')
 # Definir senha correta
 SENHA_DE_ACESSO = st.secrets['SENHA_TOKEN']
 
+# Credenciais
+GDRIVE_AUTHENTICATION = st.secrets["gdrive"]
 
-def ler_arquivo_nuvem(gc, nome_arquivo: str):
-    print('Lendo:', nome_arquivo)
+CREDENTIALS = service_account.Credentials.from_service_account_info(GDRIVE_AUTHENTICATION, scopes=["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"])
+
+# Conectar ao Google Drive
+GDRIVE = gspread.authorize(CREDENTIALS)
+
+
+def ler_arquivo_nuvem(
+        file_id: str, 
+        folder_id: str = None
+    ):
+
+    try:
+        
+        download_url = f"https://www.googleapis.com/drive/v3/files/{file_id}?alt=media"
+
+        # Fazer download do arquivo CSV
+        response = GDRIVE.request('get',download_url)
+
+        response.raise_for_status()  # Levanta um erro se o download falhar
+        
+        # Ler o conteúdo do CSV em um DataFrame
+        csv_content = response.content.decode('utf-8')
+        leia = pd.read_csv(io.StringIO(csv_content))
+        
+        print('Terminei de ler:', file_id)
+        return leia
+    except Exception as e:
+        st.error(f"Erro ao ler {file_id}: {e}")
+
+
+
+def carrega_arquivos_nuvem():
+    folder_id = st.secrets['folder_id']
+
+    # URL do Google Drive API para listar arquivos na pasta
+    url = f"https://www.googleapis.com/drive/v3/files?q='{folder_id}'+in+parents"
+
+    # Faça a requisição para listar os arquivos na pasta
+    response = GDRIVE.request('get', url)
+
+    if response.status_code != 200:
+        raise Exception(f"Erro ao listar arquivos: {response.content.decode('utf-8')}")
+
+    files = response.json()['files']
+
+    file_ids = [file['id'] for file in files]
     
-    worksheet = gc.open(nome_arquivo).sheet1
-    rows = worksheet.get_all_values()
-
-    # Criar DataFrame e remover cabeçalho duplicado
-    leia = pd.DataFrame.from_records(rows, columns=rows[0])
-    leia.drop(0, axis=0, inplace=True)
-
-    print('Terminei de ler:', nome_arquivo)
-    return leia
-
-
-# 🔹 Função para carregar todos os arquivos em paralelo
-def carrega_arquivos_nuvem(gc):
-
-    planilhas: str = st.secrets['planilhas_contratos']
-
-    planilhas = planilhas.split(';')
-
     # Criar um pool de threads para executar as tarefas em paralelo
     with ThreadPoolExecutor() as executor:
-        resultados = executor.map(lambda nome: ler_arquivo_nuvem(gc, nome), planilhas)
+        resultados = executor.map(lambda file_id: ler_arquivo_nuvem(file_id, folder_id), file_ids)
 
     return pd.concat(resultados).reset_index(drop=True)
+
 
 
 
@@ -48,17 +78,7 @@ def carrega_arquivos_nuvem(gc):
 
 @st.cache_data
 def read_bid() -> pd.DataFrame:
-
-    secrets = st.secrets["gdrive"]
-
-    # Credenciais
-    credentials = service_account.Credentials.from_service_account_info(secrets, scopes=["https://spreadsheets.google.com/feeds","https://www.googleapis.com/auth/drive"])
-
-    # Conectar ao Google Drive
-    gc = gspread.authorize(credentials)
-
-    leia = carrega_arquivos_nuvem(gc)
-
+    leia = carrega_arquivos_nuvem()
     return leia
 
 
